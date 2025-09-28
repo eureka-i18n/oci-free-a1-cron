@@ -1,7 +1,7 @@
 name: oci-free-a1-retry
 on:
   schedule:
-    - cron: '*/5 * * * *'   # toutes 5 min
+    - cron: '*/5 * * * *'   # toutes les 5 min
   workflow_dispatch:
 
 jobs:
@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # ====== REMPLACER PAR TES VALEURS ======
+      # ====== TES VALEURS (VM1) ======
       VM1_DISPLAY_NAME: "vm-data-prod (MongoDB + Elastic + RabbitMQ)"
       VM1_COMPARTMENT_ID: "ocid1.tenancy.oc1..aaaaaaaatcmlxf7camkxmvqxmvrpidxmbmairf2ujzevbvwmb6m2n5wbvnaa"
       VM1_SUBNET_ID: "ocid1.subnet.oc1.eu-paris-1.aaaaaaaa46kxavjyltcuuqpwb3zczopt5agsavcqovxjs6zpbuz52h2vf4zq"
@@ -21,6 +21,7 @@ jobs:
       VM1_ASSIGN_PUBLIC_IP: "false"
       VM1_SSH_AUTH_KEYS: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN23HAHpE9LVAMUg/g4PzRsXAX4qhwykbKrSCDCnVrvS toswapp-app@vm-data"
 
+      # ====== TES VALEURS (VM2) ======
       VM2_DISPLAY_NAME: "vm-apps-prod"
       VM2_COMPARTMENT_ID: "ocid1.tenancy.oc1..aaaaaaaatcmlxf7camkxmvqxmvrpidxmbmairf2ujzevbvwmb6m2n5wbvnaa"
       VM2_SUBNET_ID: "ocid1.subnet.oc1.eu-paris-1.aaaaaaaa46kxavjyltcuuqpwb3zczopt5agsavcqovxjs6zpbuz52h2vf4zq"
@@ -44,81 +45,60 @@ jobs:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           python3 -m pip install --user --upgrade oci-cli
-          export PATH="$HOME/.local/bin:$PATH"
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
           mkdir -p ~/.oci
           printf "[DEFAULT]\nuser=%s\ntenancy=%s\nfingerprint=%s\nregion=%s\nkey_file=%s\n" \
             "$OCI_USER_OCID" "$OCI_TENANCY_OCID" "$OCI_FINGERPRINT" "$OCI_REGION" "$HOME/.oci/oci_api_key.pem" \
             > ~/.oci/config
           umask 177 && printf "%s" "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
+          oci -v
 
       - name: Launch VM1 then VM2 if VM1 OK/exists
-        shell: bash
         run: |
           set -euo pipefail
           log(){ printf "%s %s\n" "$(date -Is)" "$*"; }
-      
+
           launch_vm () {
-            DISPLAY_NAME="$1"; COMPARTMENT_ID="$2"; SUBNET_ID="$3"; IMAGE_ID="$4"
-            OCPUS="$5"; MEM_GB="$6"; BOOT_SIZE_GB="$7"; BOOT_VPUS_PER_GB="$8"; ASSIGN_PUBLIC_IP="$9"; SSH_AUTH_KEYS="${10}"
-      
+            local DISPLAY_NAME="$1" COMPARTMENT_ID="$2" SUBNET_ID="$3" IMAGE_ID="$4"
+            local OCPUS="$5" MEM_GB="$6" BOOT_SIZE_GB="$7" BOOT_VPUS_PER_GB="$8" ASSIGN_PUBLIC_IP="$9" SSH_AUTH_KEYS="${10}"
+
             log "[$DISPLAY_NAME] start"
-      
+
+            # Déjà présente ?
+            local EXISTING_STATE
             EXISTING_STATE="$(oci compute instance list --compartment-id "$COMPARTMENT_ID" --all \
               --query "data[?\"display-name\"=='$DISPLAY_NAME'].\"lifecycle-state\" | [0]" --raw-output || true)"
             if [ -n "${EXISTING_STATE:-}" ] && [ "${EXISTING_STATE:-null}" != "null" ]; then
               log "[$DISPLAY_NAME] skip (state=$EXISTING_STATE)"
               return 0
             fi
-      
+
+            # Fichiers temp
             WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' RETURN
-      
-            cat > "$WORKDIR/instanceOptions.json" <<'JSON'
-      {
-        "areLegacyImdsEndpointsDisabled": false
-      }
-      JSON
-      
-            cat > "$WORKDIR/availabilityConfig.json" <<'JSON'
-      {
-        "recoveryAction": "RESTORE_INSTANCE"
-      }
-      JSON
-      
+            printf '{ "areLegacyImdsEndpointsDisabled": false }\n' > "$WORKDIR/instanceOptions.json"
+            printf '{ "recoveryAction": "RESTORE_INSTANCE" }\n' > "$WORKDIR/availabilityConfig.json"
             cat > "$WORKDIR/agentConfig.json" <<'JSON'
-      {
-        "isManagementDisabled": false,
-        "isMonitoringDisabled": false,
-        "pluginsConfig": [
-          {"name":"Vulnerability Scanning","desiredState":"DISABLED"},
-          {"name":"Management Agent","desiredState":"DISABLED"},
-          {"name":"Custom Logs Monitoring","desiredState":"ENABLED"},
-          {"name":"Compute RDMA GPU Monitoring","desiredState":"DISABLED"},
-          {"name":"Compute Instance Monitoring","desiredState":"ENABLED"},
-          {"name":"Compute HPC RDMA Auto-Configuration","desiredState":"DISABLED"},
-          {"name":"Compute HPC RDMA Authentication","desiredState":"DISABLED"},
-          {"name":"Cloud Guard Workload Protection","desiredState":"ENABLED"},
-          {"name":"Block Volume Management","desiredState":"DISABLED"},
-          {"name":"Bastion","desiredState":"DISABLED"}
-        ]
-      }
-      JSON
-      
-            cat > "$WORKDIR/sourceDetails.json" <<JSON
-      {
-        "sourceType": "image",
-        "imageId": "$IMAGE_ID",
-        "bootVolumeSizeInGBs": $BOOT_SIZE_GB,
-        "bootVolumeVpusPerGB": $BOOT_VPUS_PER_GB
-      }
-      JSON
-      
-            cat > "$WORKDIR/shapeConfig.json" <<JSON
-      {
-        "ocpus": $OCPUS,
-        "memoryInGBs": $MEM_GB
-      }
-      JSON
-      
+            {
+              "isManagementDisabled": false,
+              "isMonitoringDisabled": false,
+              "pluginsConfig": [
+                {"name":"Vulnerability Scanning","desiredState":"DISABLED"},
+                {"name":"Management Agent","desiredState":"DISABLED"},
+                {"name":"Custom Logs Monitoring","desiredState":"ENABLED"},
+                {"name":"Compute RDMA GPU Monitoring","desiredState":"DISABLED"},
+                {"name":"Compute Instance Monitoring","desiredState":"ENABLED"},
+                {"name":"Compute HPC RDMA Auto-Configuration","desiredState":"DISABLED"},
+                {"name":"Compute HPC RDMA Authentication","desiredState":"DISABLED"},
+                {"name":"Cloud Guard Workload Protection","desiredState":"ENABLED"},
+                {"name":"Block Volume Management","desiredState":"DISABLED"},
+                {"name":"Bastion","desiredState":"DISABLED"}
+              ]
+            }
+            JSON
+            printf '{ "sourceType": "image", "imageId": "%s", "bootVolumeSizeInGBs": %s, "bootVolumeVpusPerGB": %s }\n' \
+              "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json"
+            printf '{ "ocpus": %s, "memoryInGBs": %s }\n' "$OCPUS" "$MEM_GB" > "$WORKDIR/shapeConfig.json"
+
             log "[$DISPLAY_NAME] launch attempt in ${AD_NAME}"
             if oci compute instance launch \
                 --availability-domain "$AD_NAME" \
@@ -140,11 +120,23 @@ jobs:
               return 1
             fi
           }
-      
-          if launch_vm "$VM1_DISPLAY_NAME" "$VM1_COMPARTMENT_ID" "$VM1_SUBNET_ID" "$VM1_IMAGE_ID" \
-                       "$VM1_OCPUS" "$VM1_MEM_GB" "$VM1_BOOT_SIZE_GB" "$VM1_BOOT_VPUS_PER_GB" "$VM1_ASSIGN_PUBLIC_IP" "$VM1_SSH_AUTH_KEYS"; then
-            launch_vm "$VM2_DISPLAY_NAME" "$VM2_COMPARTMENT_ID" "$VM2_SUBNET_ID" "$VM2_IMAGE_ID" \
-                      "$VM2_OCPUS" "$VM2_MEM_GB" "$VM2_BOOT_SIZE_GB" "$VM2_BOOT_VPUS_PER_GB" "$VM2_ASSIGN_PUBLIC_IP" "$VM2_SSH_AUTH_KEYS"
+
+          # VM1
+          if launch_vm \
+              "$VM1_DISPLAY_NAME" \
+              "$VM1_COMPARTMENT_ID" \
+              "$VM1_SUBNET_ID" \
+              "$VM1_IMAGE_ID" \
+              "$VM1_OCPUS" "$VM1_MEM_GB" "$VM1_BOOT_SIZE_GB" "$VM1_BOOT_VPUS_PER_GB" "$VM1_ASSIGN_PUBLIC_IP" \
+              "$VM1_SSH_AUTH_KEYS"; then
+            # VM2 seulement si VM1 OK/présente
+            launch_vm \
+              "$VM2_DISPLAY_NAME" \
+              "$VM2_COMPARTMENT_ID" \
+              "$VM2_SUBNET_ID" \
+              "$VM2_IMAGE_ID" \
+              "$VM2_OCPUS" "$VM2_MEM_GB" "$VM2_BOOT_SIZE_GB" "$VM2_BOOT_VPUS_PER_GB" "$VM2_ASSIGN_PUBLIC_IP" \
+              "$VM2_SSH_AUTH_KEYS"
           else
             log "[gate] VM1 non créée → on ne tente pas VM2"
             exit 1
