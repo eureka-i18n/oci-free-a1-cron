@@ -45,7 +45,7 @@ jobs:
           OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
         run: |
           python3 -m pip install --user --upgrade oci-cli
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           mkdir -p ~/.oci
           printf "[DEFAULT]\nuser=%s\ntenancy=%s\nfingerprint=%s\nregion=%s\nkey_file=%s\n" \
             "$OCI_USER_OCID" "$OCI_TENANCY_OCID" "$OCI_FINGERPRINT" "$OCI_REGION" "$HOME/.oci/oci_api_key.pem" \
@@ -54,6 +54,7 @@ jobs:
           oci -v
 
       - name: Launch VM1 then VM2 if VM1 OK/exists
+        shell: bash
         run: |
           set -euo pipefail
           log(){ printf "%s %s\n" "$(date -Is)" "$*"; }
@@ -73,12 +74,12 @@ jobs:
               return 0
             fi
 
-            # Fichiers temp
+            # Fichiers temp (sans heredoc)
             WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' RETURN
-            printf '{ "areLegacyImdsEndpointsDisabled": false }\n' > "$WORKDIR/instanceOptions.json"
-            printf '{ "recoveryAction": "RESTORE_INSTANCE" }\n' > "$WORKDIR/availabilityConfig.json"
-            cat > "$WORKDIR/agentConfig.json" <<'JSON'
-            {
+            printf '%s\n' '{ "areLegacyImdsEndpointsDisabled": false }' > "$WORKDIR/instanceOptions.json"
+            printf '%s\n' '{ "recoveryAction": "RESTORE_INSTANCE" }' > "$WORKDIR/availabilityConfig.json"
+
+            printf '%s\n' '{
               "isManagementDisabled": false,
               "isMonitoringDisabled": false,
               "pluginsConfig": [
@@ -93,10 +94,10 @@ jobs:
                 {"name":"Block Volume Management","desiredState":"DISABLED"},
                 {"name":"Bastion","desiredState":"DISABLED"}
               ]
-            }
-            JSON
+            }' > "$WORKDIR/agentConfig.json"
+
             printf '{ "sourceType": "image", "imageId": "%s", "bootVolumeSizeInGBs": %s, "bootVolumeVpusPerGB": %s }\n' \
-              "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json"
+              "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json
             printf '{ "ocpus": %s, "memoryInGBs": %s }\n' "$OCPUS" "$MEM_GB" > "$WORKDIR/shapeConfig.json"
 
             log "[$DISPLAY_NAME] launch attempt in ${AD_NAME}"
