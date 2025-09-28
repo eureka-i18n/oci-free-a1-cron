@@ -74,11 +74,10 @@ jobs:
               return 0
             fi
 
-            # Fichiers temp (sans heredoc)
+            # Fichiers temp (pas de heredoc → pas d'ambiguïté de quotes)
             WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' RETURN
             printf '%s\n' '{ "areLegacyImdsEndpointsDisabled": false }' > "$WORKDIR/instanceOptions.json"
             printf '%s\n' '{ "recoveryAction": "RESTORE_INSTANCE" }' > "$WORKDIR/availabilityConfig.json"
-
             printf '%s\n' '{
               "isManagementDisabled": false,
               "isMonitoringDisabled": false,
@@ -96,8 +95,10 @@ jobs:
               ]
             }' > "$WORKDIR/agentConfig.json"
 
+            # Cette ligne était la source de l'erreur → guillemet FERMÉ après .json ✅
             printf '{ "sourceType": "image", "imageId": "%s", "bootVolumeSizeInGBs": %s, "bootVolumeVpusPerGB": %s }\n' \
-              "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json
+              "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json"
+
             printf '{ "ocpus": %s, "memoryInGBs": %s }\n' "$OCPUS" "$MEM_GB" > "$WORKDIR/shapeConfig.json"
 
             log "[$DISPLAY_NAME] launch attempt in ${AD_NAME}"
