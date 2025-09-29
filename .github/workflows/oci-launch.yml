@@ -1,7 +1,8 @@
 name: oci-free-a1-retry
 on:
   schedule:
-    - cron: '*/5 * * * *'   # toutes les 5 min
+    - cron: '2-59/10 * * * *'  # 02,12,22,32,42,52 toutes les 5 min
+    - cron: '7-59/10 * * * *'  # 07,17,27,37,47,57
   workflow_dispatch:
 
 permissions:
