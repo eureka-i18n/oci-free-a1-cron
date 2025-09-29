@@ -66,7 +66,7 @@ jobs:
           umask 177 && printf "%s" "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
           oci -v
 
-      - name: Launch VM1 then VM2 (with retries + 429-aware backoff)
+      - name: Launch VM1 then VM2 (with retries + 429-aware backoff) + full error logs)
         shell: bash
         run: |
           set -euo pipefail
@@ -135,6 +135,13 @@ jobs:
             if [ $rc -eq 0 ]; then
               return 0
             fi
+            
+            # === LOG COMPLET DE L'ERREUR OCI ===
+            log "[$DISPLAY_NAME] OCI error (exit=$rc) — full stderr below:"
+            # indentation pour lisibilité
+            sed 's/^/    /' "$OCI_ERR" || true
+
+            # Codes dédiés selon le contenu
             if grep -qi 'TooManyRequests' "$OCI_ERR"; then
               return 129
             fi
