@@ -18,7 +18,7 @@ jobs:
       VM1_MEM_GB: "10"
       VM1_BOOT_SIZE_GB: "50"
       VM1_BOOT_VPUS_PER_GB: "10"
-      VM1_ASSIGN_PUBLIC_IP: ${{ secrets.ASSIGN_PUBLIC_IP }}
+      VM1_ASSIGN_PUBLIC_IP: "false"
       VM1_SSH_AUTH_KEYS: ${{ secrets.SSH_AUTH_KEYS }}
       
       # ====== TES VALEURS (VM2) ======
@@ -30,7 +30,7 @@ jobs:
       VM2_MEM_GB: "14"
       VM2_BOOT_SIZE_GB: "50"
       VM2_BOOT_VPUS_PER_GB: "10"
-      VM2_ASSIGN_PUBLIC_IP: ${{ secrets.ASSIGN_PUBLIC_IP }}
+      VM2_ASSIGN_PUBLIC_IP: "false"
       VM2_SSH_AUTH_KEYS: ${{ secrets.SSH_AUTH_KEYS }}
 
       AD_NAME: ${{ secrets.AD_NAME }}
