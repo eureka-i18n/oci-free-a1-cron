@@ -9,25 +9,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      # ====== TES VALEURS (VM1) ======
-      VM1_DISPLAY_NAME: "vm-data-prod (MongoDB + Elastic + RabbitMQ)"
+     # ====== TES VALEURS (VM1) ======
+      VM1_DISPLAY_NAME: "vm-apps-prod"
       VM1_COMPARTMENT_ID: "ocid1.tenancy.oc1..aaaaaaaatcmlxf7camkxmvqxmvrpidxmbmairf2ujzevbvwmb6m2n5wbvnaa"
       VM1_SUBNET_ID: "ocid1.subnet.oc1.eu-paris-1.aaaaaaaa46kxavjyltcuuqpwb3zczopt5agsavcqovxjs6zpbuz52h2vf4zq"
       VM1_IMAGE_ID: "ocid1.image.oc1.eu-paris-1.aaaaaaaaieemjackdiwwimkllgvsmyqif7k4xj5dppg272rccxwzxujvbmja"
       VM1_OCPUS: "2"
-      VM1_MEM_GB: "14"
+      VM1_MEM_GB: "10"
       VM1_BOOT_SIZE_GB: "50"
       VM1_BOOT_VPUS_PER_GB: "10"
       VM1_ASSIGN_PUBLIC_IP: "false"
       VM1_SSH_AUTH_KEYS: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN23HAHpE9LVAMUg/g4PzRsXAX4qhwykbKrSCDCnVrvS toswapp-app@vm-data"
-
+      
       # ====== TES VALEURS (VM2) ======
-      VM2_DISPLAY_NAME: "vm-apps-prod"
+      VM2_DISPLAY_NAME: "vm-data-prod (MongoDB + Elastic + RabbitMQ)"
       VM2_COMPARTMENT_ID: "ocid1.tenancy.oc1..aaaaaaaatcmlxf7camkxmvqxmvrpidxmbmairf2ujzevbvwmb6m2n5wbvnaa"
       VM2_SUBNET_ID: "ocid1.subnet.oc1.eu-paris-1.aaaaaaaa46kxavjyltcuuqpwb3zczopt5agsavcqovxjs6zpbuz52h2vf4zq"
       VM2_IMAGE_ID: "ocid1.image.oc1.eu-paris-1.aaaaaaaaieemjackdiwwimkllgvsmyqif7k4xj5dppg272rccxwzxujvbmja"
       VM2_OCPUS: "2"
-      VM2_MEM_GB: "10"
+      VM2_MEM_GB: "14"
       VM2_BOOT_SIZE_GB: "50"
       VM2_BOOT_VPUS_PER_GB: "10"
       VM2_ASSIGN_PUBLIC_IP: "false"
