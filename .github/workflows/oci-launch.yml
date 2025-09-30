@@ -10,7 +10,7 @@ permissions:
 jobs:
   launch:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     concurrency:
       group: oci-free-a1-retry
       cancel-in-progress: true
@@ -42,12 +42,9 @@ jobs:
 
       # ===== Global =====
       AD_NAME: ${{ secrets.AD_NAME }}
-      # Deadline dynamique vers le prochain créneau nominal du cron (2-59/5)
-      CRON_OFFSET_MIN: "2"          # premier tir: minute 02
-      CRON_PERIOD_MIN: "5"          # toutes les 5 minutes
-      SAFETY_MARGIN_SEC: "45"       # marge pour ne pas chevaucher le prochain cron
-      SLEEP_BETWEEN_ATTEMPTS_SEC: "45"
-      JITTER_MAX_SEC: "10"          # +0–10s si 429
+      RUN_BUDGET_PER_RUN_SEC: "270"        # ~4 min 30 de retries “jusqu’au prochain cron”
+      SLEEP_BETWEEN_ATTEMPTS_SEC: "45"     # pause standard
+      JITTER_MAX_SEC: "10"                 # +0–10s si 429
 
     steps:
       - name: Setup OCI CLI (no secret echo)
@@ -70,34 +67,13 @@ jobs:
           umask 177 && printf "%s" "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
           oci -v
 
-      - name: Launch VM1 then VM2 (dynamic deadline to next cron + 429-aware + full error logs)
+      - name: Launch VM1 then VM2 (run-level timebox + 429-aware + full error logs)
         shell: bash
         run: |
           set -euo pipefail
           log(){ printf "%s %s\n" "$(date -Is)" "$*"; }
 
-          # === Calcule une deadline dynamique: juste avant le prochain créneau du cron (UTC) ===
-          PERIOD=${CRON_PERIOD_MIN:-5}
-          OFFSET=${CRON_OFFSET_MIN:-2}
-          MARGIN=${SAFETY_MARGIN_SEC:-45}
-
-          now_ts=$(date -u +%s)
-          min=$(date -u +%M); sec=$(date -u +%S)
-          min=$((10#$min)); sec=$((10#$sec))
-          delta=$(( ( (min - OFFSET) % PERIOD + PERIOD ) % PERIOD ))
-          if [ $delta -eq 0 ]; then
-            mins_to_next=$PERIOD
-          else
-            mins_to_next=$(( PERIOD - delta ))
-          fi
-          secs_to_next=$(( mins_to_next*60 - sec ))
-          budget=$(( secs_to_next - MARGIN ))
-          if [ $budget -le 15 ]; then budget=15; fi   # budget minimal de sécurité
-
-          DEADLINE_TS=$(( now_ts + budget ))
-          log "[scheduler] Next nominal tick in ${secs_to_next}s -> using budget=${budget}s (until $(date -u -d "@$DEADLINE_TS" +%H:%M:%S)Z)"
-
-          # === Tentative unique : 0=OK, 129=TooManyRequests(429), 130=Out of capacity, autre=échec générique ===
+          # tentative unique : 0=OK, 129=TooManyRequests(429), 130=Out of capacity, autre=échec générique
           try_launch(){
             local DISPLAY_NAME="$1" COMPARTMENT_ID="$2" SUBNET_ID="$3" IMAGE_ID="$4" OCPUS="$5" MEM_GB="$6" \
                   BOOT_SIZE_GB="$7" BOOT_VPUS_PER_GB="$8" ASSIGN_PUBLIC_IP="$9" SSH_AUTH_KEYS="${10}"
@@ -173,18 +149,18 @@ jobs:
             return $rc
           }
 
-          # === Boucle jusqu'à la DEADLINE dynamique ===
+          # boucle “jusqu’au prochain cron” ≈ timebox global (RUN_BUDGET_PER_RUN_SEC)
           launch_until_deadline(){
-            local DEADLINE="$1"; shift
+            local DEADLINE_SEC="$1"; shift
             local NAME="$1"; shift
             local now attempt=1 status delay
             while true; do
-              now="$(date -u +%s)"
-              if [ "$now" -ge "$DEADLINE" ]; then
-                log "[$NAME] deadline reached — stop for this run"
+              now="$(date +%s)"
+              if [ "$now" -ge "$DEADLINE_SEC" ]; then
+                log "[$NAME] run-level budget reached"
                 return 1
               fi
-              log "[$NAME] attempt $attempt (time left: $((DEADLINE - now))s)"
+              log "[$NAME] attempt $attempt (time left: $((DEADLINE_SEC - now))s)"
               if try_launch "$@"; then
                 log "[$NAME] OK"
                 return 0
@@ -201,7 +177,11 @@ jobs:
             done
           }
 
-          # === VM1 puis VM2 dans le temps restant ===
+          # === Calcul du "deadline" du run (depuis le début du job)
+          START_TS="$(date +%s)"
+          DEADLINE_TS="$(( START_TS + RUN_BUDGET_PER_RUN_SEC ))"
+
+          # VM1 (on utilise le budget jusqu’à réussite)
           if launch_until_deadline \
               "$DEADLINE_TS" \
               "$VM1_DISPLAY_NAME" \
@@ -209,6 +189,7 @@ jobs:
               "$VM1_OCPUS" "$VM1_MEM_GB" "$VM1_BOOT_SIZE_GB" "$VM1_BOOT_VPUS_PER_GB" "$VM1_ASSIGN_PUBLIC_IP" \
               "$VM1_SSH_AUTH_KEYS"; then
 
+            # VM2 (seulement si VM1 OK ; on utilise le temps restant)
             if ! launch_until_deadline \
                 "$DEADLINE_TS" \
                 "$VM2_DISPLAY_NAME" \
