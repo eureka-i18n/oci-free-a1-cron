@@ -1,9 +1,7 @@
 name: oci-free-a1-retry
-
 on:
   schedule:
-    - cron: '2-59/10 * * * *'  # 02,12,22,32,42,52 UTC
-    - cron: '7-59/10 * * * *'  # 07,17,27,37,47,57 UTC
+    - cron: '2-59/5 * * * *'   # toutes 5 min (décalé) en UTC
   workflow_dispatch:
 
 permissions:
@@ -12,7 +10,7 @@ permissions:
 jobs:
   launch:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     concurrency:
       group: oci-free-a1-retry
       cancel-in-progress: true
@@ -44,43 +42,14 @@ jobs:
 
       # ===== Global =====
       AD_NAME: ${{ secrets.AD_NAME }}
-      RETRIES: "3"           # 2–3 retries par run
-      BASE_DELAY_SEC: "30"   # 30s, 60s, 90s…
-      JITTER_MAX_SEC: "10"   # +0–10s pour désynchroniser
+      # Deadline dynamique vers le prochain créneau nominal du cron (2-59/5)
+      CRON_OFFSET_MIN: "2"          # premier tir: minute 02
+      CRON_PERIOD_MIN: "5"          # toutes les 5 minutes
+      SAFETY_MARGIN_SEC: "45"       # marge pour ne pas chevaucher le prochain cron
+      SLEEP_BETWEEN_ATTEMPTS_SEC: "45"
+      JITTER_MAX_SEC: "10"          # +0–10s si 429
 
     steps:
-      # --- Self-throttle: skip si un run très récent existe (limite les chevauchements avec 2 crons)
-      - name: Self-throttle (skip if a recent run exists)
-        env:
-          GH_TOKEN: ${{ github.token }}   # auth pour gh CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found; proceeding without self-throttle safeguard."
-            exit 0
-          fi
-          if ! command -v jq >/dev/null 2>&1; then
-            echo "jq not found; proceeding without self-throttle safeguard."
-            exit 0
-          fi
-          # Récupère les 5 derniers runs de CE workflow
-          last_json="$(gh run list --workflow "${GITHUB_WORKFLOW}" --limit 5 --json startedAt,databaseId,status || true)"
-          # Trouve le run le plus récent différent de celui en cours
-          last_started="$(jq -r --arg curr "${GITHUB_RUN_ID}" '
-            map(select((.databaseId|tostring) != $curr)) | sort_by(.startedAt) | reverse | .[0].startedAt // empty
-          ' <<<"$last_json")"
-          if [ -n "${last_started:-}" ]; then
-            last_ts=$(date -u -d "$last_started" +%s)
-            now_ts=$(date -u +%s)
-            age=$(( now_ts - last_ts ))
-            if [ $age -lt 180 ]; then
-              echo "Another run started at $last_started (age=${age}s < 180s) — exiting early."
-              exit 0
-            fi
-          fi
-          echo "No recent run within 180s — continuing."
-
       - name: Setup OCI CLI (no secret echo)
         env:
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
@@ -93,6 +62,7 @@ jobs:
           set -euo pipefail
           python3 -m pip install --user --upgrade oci-cli
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
           mkdir -p ~/.oci
           printf "[DEFAULT]\nuser=%s\ntenancy=%s\nfingerprint=%s\nregion=%s\nkey_file=%s\n" \
             "$OCI_USER_OCID" "$OCI_TENANCY_OCID" "$OCI_FINGERPRINT" "$OCI_REGION" "$HOME/.oci/oci_api_key.pem" \
@@ -100,14 +70,34 @@ jobs:
           umask 177 && printf "%s" "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
           oci -v
 
-      - name: Launch VM1 then VM2 (with retries + 429-aware backoff + full error logs)
+      - name: Launch VM1 then VM2 (dynamic deadline to next cron + 429-aware + full error logs)
         shell: bash
         run: |
           set -euo pipefail
           log(){ printf "%s %s\n" "$(date -Is)" "$*"; }
 
-          # tentative unique (retourne:
-          #  0=OK, 129=TooManyRequests(429), 130=Out of capacity, autre=échec générique)
+          # === Calcule une deadline dynamique: juste avant le prochain créneau du cron (UTC) ===
+          PERIOD=${CRON_PERIOD_MIN:-5}
+          OFFSET=${CRON_OFFSET_MIN:-2}
+          MARGIN=${SAFETY_MARGIN_SEC:-45}
+
+          now_ts=$(date -u +%s)
+          min=$(date -u +%M); sec=$(date -u +%S)
+          min=$((10#$min)); sec=$((10#$sec))
+          delta=$(( ( (min - OFFSET) % PERIOD + PERIOD ) % PERIOD ))
+          if [ $delta -eq 0 ]; then
+            mins_to_next=$PERIOD
+          else
+            mins_to_next=$(( PERIOD - delta ))
+          fi
+          secs_to_next=$(( mins_to_next*60 - sec ))
+          budget=$(( secs_to_next - MARGIN ))
+          if [ $budget -le 15 ]; then budget=15; fi   # budget minimal de sécurité
+
+          DEADLINE_TS=$(( now_ts + budget ))
+          log "[scheduler] Next nominal tick in ${secs_to_next}s -> using budget=${budget}s (until $(date -u -d "@$DEADLINE_TS" +%H:%M:%S)Z)"
+
+          # === Tentative unique : 0=OK, 129=TooManyRequests(429), 130=Out of capacity, autre=échec générique ===
           try_launch(){
             local DISPLAY_NAME="$1" COMPARTMENT_ID="$2" SUBNET_ID="$3" IMAGE_ID="$4" OCPUS="$5" MEM_GB="$6" \
                   BOOT_SIZE_GB="$7" BOOT_VPUS_PER_GB="$8" ASSIGN_PUBLIC_IP="$9" SSH_AUTH_KEYS="${10}"
@@ -146,7 +136,7 @@ jobs:
               "$IMAGE_ID" "$BOOT_SIZE_GB" "$BOOT_VPUS_PER_GB" > "$WORKDIR/sourceDetails.json"
             printf '{ "ocpus": %s, "memoryInGBs": %s }\n' "$OCPUS" "$MEM_GB" > "$WORKDIR/shapeConfig.json"
 
-            # Lancer et capturer erreur
+            # Lancer et capturer stderr
             OCI_ERR="$WORKDIR/err.log"
             set +e
             oci compute instance launch \
@@ -170,7 +160,7 @@ jobs:
               return 0
             fi
 
-            # === LOG COMPLET DE L'ERREUR OCI ===
+            # Log d'erreur complet
             log "[$DISPLAY_NAME] OCI error (exit=$rc) — full stderr below:"
             sed 's/^/    /' "$OCI_ERR" || true
 
@@ -183,41 +173,44 @@ jobs:
             return $rc
           }
 
-          # retries avec backoff + jitter (+ backoff plus long si 429)
-          launch_with_retries(){
+          # === Boucle jusqu'à la DEADLINE dynamique ===
+          launch_until_deadline(){
+            local DEADLINE="$1"; shift
             local NAME="$1"; shift
-            local i delay status
-            for (( i=1; i<=${RETRIES}; i++ )); do
-              log "[$NAME] attempt $i/${RETRIES}"
+            local now attempt=1 status delay
+            while true; do
+              now="$(date -u +%s)"
+              if [ "$now" -ge "$DEADLINE" ]; then
+                log "[$NAME] deadline reached — stop for this run"
+                return 1
+              fi
+              log "[$NAME] attempt $attempt (time left: $((DEADLINE - now))s)"
               if try_launch "$@"; then
                 log "[$NAME] OK"
                 return 0
               fi
               status=$?
-              if [ "$i" -lt "${RETRIES}" ]; then
-                if [ $status -eq 129 ]; then
-                  delay=$(( i*BASE_DELAY_SEC + 60 + (RANDOM % JITTER_MAX_SEC) ))
-                  log "[$NAME] 429 TooManyRequests — pause ${delay}s avant retry"
-                else
-                  delay=$(( i*BASE_DELAY_SEC + (RANDOM % JITTER_MAX_SEC) ))
-                  log "[$NAME] waiting ${delay}s before retry"
-                fi
+              if [ $status -eq 129 ]; then
+                delay=$(( 60 + (RANDOM % JITTER_MAX_SEC) ))
+                log "[$NAME] 429 TooManyRequests — pause ${delay}s"
                 sleep "$delay"
+              else
+                sleep "$SLEEP_BETWEEN_ATTEMPTS_SEC"
               fi
+              attempt=$((attempt+1))
             done
-            log "[$NAME] FAIL after ${RETRIES} attempts"
-            return 1
           }
 
-          # VM1 (si échec → job échoue, pas de VM2)
-          if launch_with_retries \
+          # === VM1 puis VM2 dans le temps restant ===
+          if launch_until_deadline \
+              "$DEADLINE_TS" \
               "$VM1_DISPLAY_NAME" \
               "$VM1_DISPLAY_NAME" "$VM1_COMPARTMENT_ID" "$VM1_SUBNET_ID" "$VM1_IMAGE_ID" \
               "$VM1_OCPUS" "$VM1_MEM_GB" "$VM1_BOOT_SIZE_GB" "$VM1_BOOT_VPUS_PER_GB" "$VM1_ASSIGN_PUBLIC_IP" \
               "$VM1_SSH_AUTH_KEYS"; then
 
-            # VM2 (si échec → on log, prochain cron retentera)
-            if ! launch_with_retries \
+            if ! launch_until_deadline \
+                "$DEADLINE_TS" \
                 "$VM2_DISPLAY_NAME" \
                 "$VM2_DISPLAY_NAME" "$VM2_COMPARTMENT_ID" "$VM2_SUBNET_ID" "$VM2_IMAGE_ID" \
                 "$VM2_OCPUS" "$VM2_MEM_GB" "$VM2_BOOT_SIZE_GB" "$VM2_BOOT_VPUS_PER_GB" "$VM2_ASSIGN_PUBLIC_IP" \
@@ -225,6 +218,6 @@ jobs:
               log "[${VM2_DISPLAY_NAME}] FAIL — retry au prochain cron"
             fi
           else
-            log "[gate] VM1 non créée — pas de tentative VM2"
+            log "[gate] VM1 non créée dans la fenêtre — pas de tentative VM2"
             exit 1
           fi
