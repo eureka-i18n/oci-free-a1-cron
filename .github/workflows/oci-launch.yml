@@ -49,38 +49,6 @@ jobs:
       JITTER_MAX_SEC: "10"   # +0–10s pour désynchroniser
 
     steps:
-      # --- Self-throttle: skip si un run très récent existe (limite les chevauchements avec 2 crons)
-      - name: Self-throttle (skip if a recent run exists)
-        env:
-          GH_TOKEN: ${{ github.token }}   # auth pour gh CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v gh >/dev/null 2>&1; then
-            echo "gh CLI not found; proceeding without self-throttle safeguard."
-            exit 0
-          fi
-          if ! command -v jq >/dev/null 2>&1; then
-            echo "jq not found; proceeding without self-throttle safeguard."
-            exit 0
-          fi
-          # Récupère les 5 derniers runs de CE workflow
-          last_json="$(gh run list --workflow "${GITHUB_WORKFLOW}" --limit 5 --json startedAt,databaseId,status || true)"
-          # Trouve le run le plus récent différent de celui en cours
-          last_started="$(jq -r --arg curr "${GITHUB_RUN_ID}" '
-            map(select((.databaseId|tostring) != $curr)) | sort_by(.startedAt) | reverse | .[0].startedAt // empty
-          ' <<<"$last_json")"
-          if [ -n "${last_started:-}" ]; then
-            last_ts=$(date -u -d "$last_started" +%s)
-            now_ts=$(date -u +%s)
-            age=$(( now_ts - last_ts ))
-            if [ $age -lt 180 ]; then
-              echo "Another run started at $last_started (age=${age}s < 180s) — exiting early."
-              exit 0
-            fi
-          fi
-          echo "No recent run within 180s — continuing."
-
       - name: Setup OCI CLI (no secret echo)
         env:
           OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
