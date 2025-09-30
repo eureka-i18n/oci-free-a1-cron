@@ -2,8 +2,11 @@ name: oci-free-a1-retry
 
 on:
   schedule:
-    - cron: '2-59/10 * * * *'  # 02,12,22,32,42,52 UTC
-    - cron: '7-59/10 * * * *'  # 07,17,27,37,47,57 UTC
+    - cron: '0-59/5 * * * *'
+    - cron: '1-59/5 * * * *'
+    - cron: '2-59/5 * * * *'
+    - cron: '3-59/5 * * * *'
+    - cron: '4-59/5 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -44,9 +47,9 @@ jobs:
 
       # ===== Global =====
       AD_NAME: ${{ secrets.AD_NAME }}
-      RETRIES: "3"           # 2–3 retries par run
-      BASE_DELAY_SEC: "30"   # 30s, 60s, 90s…
-      JITTER_MAX_SEC: "10"   # +0–10s pour désynchroniser
+      RETRIES: "2"           # 2–3 retries par run
+      BASE_DELAY_SEC: "20"   # 30s, 60s, 90s…
+      JITTER_MAX_SEC: "8"   # +0–10s pour désynchroniser
 
     steps:
       - name: Setup OCI CLI (no secret echo)
