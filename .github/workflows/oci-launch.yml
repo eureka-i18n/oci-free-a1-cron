@@ -1,7 +1,7 @@
 name: oci-free-a1-retry
 
 on:
-  workflow_dispatch: {}   # déclenché par Cloudflare Worker via l'API GitHub
+  workflow_dispatch: {}   
 
 permissions:
   contents: read
