@@ -42,7 +42,7 @@ jobs:
       # ===== Global =====
       AD_NAME: ${{ secrets.AD_NAME }}
       RETRIES: "5"
-      BASE_DELAY_SEC: "5"
+      BASE_DELAY_SEC: "4"
       JITTER_MAX_SEC: "1"
 
     steps:
