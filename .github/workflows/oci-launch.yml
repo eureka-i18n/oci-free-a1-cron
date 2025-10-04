@@ -42,8 +42,8 @@ jobs:
       # ===== Global =====
       AD_NAME: ${{ secrets.AD_NAME }}
       RETRIES: "5"
-      BASE_DELAY_SEC: "5"
-      JITTER_MAX_SEC: "5"
+      BASE_DELAY_SEC: "3"
+      JITTER_MAX_SEC: "3"
 
     steps:
       - name: Setup OCI CLI
