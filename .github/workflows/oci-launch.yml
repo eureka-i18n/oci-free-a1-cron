@@ -43,7 +43,7 @@ jobs:
       AD_NAME: ${{ secrets.AD_NAME }}
       RETRIES: "5"
       BASE_DELAY_SEC: "4"
-      JITTER_MAX_SEC: "2"
+      JITTER_MAX_SEC: "3"
 
     steps:
       - name: Setup OCI CLI
@@ -158,7 +158,7 @@ jobs:
               status=$?
               if [ "$i" -lt "${RETRIES}" ]; then
                 if [ $status -eq 129 ]; then
-                  delay=$(( i + BASE_DELAY_SEC + 20 + (RANDOM % JITTER_MAX_SEC) ))
+                  delay=$(( i + BASE_DELAY_SEC + 30 + (RANDOM % JITTER_MAX_SEC) ))
                   log "[$NAME] 429 TooManyRequests — pause ${delay}s"
                 else
                   delay=$(( i + BASE_DELAY_SEC + (RANDOM % JITTER_MAX_SEC) ))
