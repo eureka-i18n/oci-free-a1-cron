@@ -63,6 +63,12 @@ jobs:
             "$OCI_USER_OCID" "$OCI_TENANCY_OCID" "$OCI_FINGERPRINT" "$OCI_REGION" "$HOME/.oci/oci_api_key.pem" \
             > ~/.oci/config
           umask 177 && printf "%s" "$OCI_PRIVATE_KEY" > ~/.oci/oci_api_key.pem
+          # --- Fix & suppress OCI config permission warning ---
+          chmod 700 ~/.oci || true
+          chmod 600 ~/.oci/config ~/.oci/oci_api_key.pem || true
+          oci setup repair-file-permissions --file ~/.oci/config || true
+          export OCI_CLI_SUPPRESS_FILE_PERMISSIONS_WARNING=True
+          # ----------------------------------------------------
           oci -v
 
       - name: Launch VM1 then VM2
