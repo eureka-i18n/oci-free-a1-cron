@@ -176,7 +176,7 @@ jobs:
 
           # 1) Sommes actuelles (A1)
           mapfile -t A1_IDS < <(oci compute instance list --compartment-id "$VM1_COMPARTMENT_ID" --all \
-            --query "data[? \`lifecycle-state\`!='TERMINATED' && contains(shape,'VM.Standard.A1')].id" \
+            --query "data[?\`lifecycle-state\`!='TERMINATED' && contains(shape,'VM.Standard.A1')].id" \
             --raw-output || true)
 
           SUM_OC=0
@@ -190,10 +190,14 @@ jobs:
             SUM_MB=$((SUM_MB + MB))
           done
 
-          # 2) Volumes actuels (Block + Boot AVAILABLE)
-          VOL_JSON="$(oci bv volume list --compartment-id "$VM1_COMPARTMENT_ID" --all \
-            --query "data[? \`lifecycle-state\`=='AVAILABLE'].size-in-gbs" --raw-output || true)"
-          SUM_GB=$(jq 'add // 0' <<<"${VOL_JSON:-[]}")
+          # 2) Volumes actuels (Block + Boot, AVAILABLE ou IN_USE)
+          BV_SIZE=$(oci bv volume list --compartment-id "$VM1_COMPARTMENT_ID" --all \
+            | jq '[.data[] | select(."lifecycle-state"=="AVAILABLE" or ."lifecycle-state"=="IN_USE") | ."size-in-gbs"] | add // 0')
+
+          BOOT_SIZE=$(oci bv boot-volume list --availability-domain "$AD_NAME" --compartment-id "$VM1_COMPARTMENT_ID" --all \
+            | jq '[.data[] | select(."lifecycle-state"=="AVAILABLE" or ."lifecycle-state"=="IN_USE") | ."size-in-gbs"] | add // 0')
+
+          SUM_GB=$(( BV_SIZE + BOOT_SIZE ))
 
           # 3) Déterminer si VM1/VM2 existent déjà
           EXISTS1="$(oci compute instance list --compartment-id "$VM1_COMPARTMENT_ID" --all \
