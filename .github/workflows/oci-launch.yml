@@ -1,7 +1,7 @@
 name: oci-free-a1-retry
 
 on:
-  workflow_dispatch: {}   
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -94,17 +94,17 @@ jobs:
             printf '%s\n' '{ "areLegacyImdsEndpointsDisabled": false }' > "$WORKDIR/instanceOptions.json"
             printf '%s\n' '{ "recoveryAction": "RESTORE_INSTANCE" }' > "$WORKDIR/availabilityConfig.json"
             printf '%s\n' '{
-              "isManagementDisabled": false,
-              "isMonitoringDisabled": false,
+              "isManagementDisabled": true,
+              "isMonitoringDisabled": true,
               "pluginsConfig": [
                 {"name":"Vulnerability Scanning","desiredState":"DISABLED"},
                 {"name":"Management Agent","desiredState":"DISABLED"},
-                {"name":"Custom Logs Monitoring","desiredState":"ENABLED"},
+                {"name":"Custom Logs Monitoring","desiredState":"DISABLED"},
                 {"name":"Compute RDMA GPU Monitoring","desiredState":"DISABLED"},
-                {"name":"Compute Instance Monitoring","desiredState":"ENABLED"},
+                {"name":"Compute Instance Monitoring","desiredState":"DISABLED"},
                 {"name":"Compute HPC RDMA Auto-Configuration","desiredState":"DISABLED"},
                 {"name":"Compute HPC RDMA Authentication","desiredState":"DISABLED"},
-                {"name":"Cloud Guard Workload Protection","desiredState":"ENABLED"},
+                {"name":"Cloud Guard Workload Protection","desiredState":"DISABLED"},
                 {"name":"Block Volume Management","desiredState":"DISABLED"},
                 {"name":"Bastion","desiredState":"DISABLED"}
               ]
@@ -170,6 +170,61 @@ jobs:
             log "[$NAME] FAIL after ${RETRIES} attempts"
             return 1
           }
+
+          # ---------------- Always Free guard (current + planned) ----------------
+          command -v jq >/dev/null || { sudo apt-get update -y && sudo apt-get install -y jq; }
+
+          # 1) Sommes actuelles (A1)
+          mapfile -t A1_IDS < <(oci compute instance list --compartment-id "$VM1_COMPARTMENT_ID" --all \
+            --query "data[? \`lifecycle-state\`!='TERMINATED' && contains(shape,'VM.Standard.A1')].id" \
+            --raw-output || true)
+
+          SUM_OC=0
+          SUM_MB=0
+          for ID in "${A1_IDS[@]}"; do
+            [ -z "$ID" ] && continue
+            J="$(oci compute instance get --instance-id "$ID" || true)"
+            OC="$(jq -r '.data["shape-config"].ocpus // 0' <<<"$J")"
+            MB="$(jq -r '.data["shape-config"]["memory-in-gbs"] // 0' <<<"$J")"
+            SUM_OC=$((SUM_OC + OC))
+            SUM_MB=$((SUM_MB + MB))
+          done
+
+          # 2) Volumes actuels (Block + Boot AVAILABLE)
+          VOL_JSON="$(oci bv volume list --compartment-id "$VM1_COMPARTMENT_ID" --all \
+            --query "data[? \`lifecycle-state\`=='AVAILABLE'].size-in-gbs" --raw-output || true)"
+          SUM_GB=$(jq 'add // 0' <<<"${VOL_JSON:-[]}")
+
+          # 3) Déterminer si VM1/VM2 existent déjà
+          EXISTS1="$(oci compute instance list --compartment-id "$VM1_COMPARTMENT_ID" --all \
+            --query "data[?\"display-name\"=='$VM1_DISPLAY_NAME' && \`lifecycle-state\`!='TERMINATED'].id | [0]" \
+            --raw-output || true)"
+          EXISTS2="$(oci compute instance list --compartment-id "$VM2_COMPARTMENT_ID" --all \
+            --query "data[?\"display-name\"=='$VM2_DISPLAY_NAME' && \`lifecycle-state\`!='TERMINATED'].id | [0]" \
+            --raw-output || true)"
+
+          ADD_OC=0; ADD_MB=0; ADD_GB=0
+          if [ -z "$EXISTS1" ] || [ "$EXISTS1" = "null" ]; then
+            ADD_OC=$((ADD_OC + VM1_OCPUS))
+            ADD_MB=$((ADD_MB + VM1_MEM_GB))
+            ADD_GB=$((ADD_GB + VM1_BOOT_SIZE_GB))
+          fi
+          if [ -z "$EXISTS2" ] || [ "$EXISTS2" = "null" ]; then
+            ADD_OC=$((ADD_OC + VM2_OCPUS))
+            ADD_MB=$((ADD_MB + VM2_MEM_GB))
+            ADD_GB=$((ADD_GB + VM2_BOOT_SIZE_GB))
+          fi
+
+          PLANNED_OC=$((SUM_OC + ADD_OC))
+          PLANNED_MB=$((SUM_MB + ADD_MB))
+          PLANNED_GB=$((SUM_GB + ADD_GB))
+
+          AF_OC=4; AF_RAM=24; AF_GB=200
+          echo "AF check → current A1: OCPU=$SUM_OC / RAM=$SUM_MB / Volumes=$SUM_GB ; planned add: +$ADD_OC OCPU, +$ADD_MB GB RAM, +$ADD_GB GB ; totals → OCPU=$PLANNED_OC RAM=$PLANNED_MB Vol=$PLANNED_GB"
+          if [ "$PLANNED_OC" -gt "$AF_OC" ] || [ "$PLANNED_MB" -gt "$AF_RAM" ] || [ "$PLANNED_GB" -gt "$AF_GB" ]; then
+            echo "⛔ Dépasse Always Free — abort"; exit 1
+          fi
+          # ----------------------------------------------------------------------
 
           if launch_with_retries \
               "$VM1_DISPLAY_NAME" \
